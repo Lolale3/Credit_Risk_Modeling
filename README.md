@@ -1,4 +1,4 @@
-# Credit Risk Modeling — Probability of Default Scorecard
+# Credit Risk Modeling - Probability of Default Scorecard
 
 A probability-of-default (PD) model built on Lending Club consumer loan data, turned into an interpretable, FICO-style credit scorecard. The focus is on the parts that matter in a real lending context: **explainability, leakage control, and choosing a decision cutoff by its cost - not by default.**
 
