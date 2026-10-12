@@ -168,27 +168,5 @@ The notebook runs in Google Colab or in a local Jupyter environment.
 
 **Requirements:** Python 3.10+, pandas, numpy, scikit-learn, scipy, matplotlib, seaborn.
 
----
 
-## Files
 
-| File | Contents |
-|---|---|
-| `Credit_Risk_Modelling.ipynb` | The full analysis, with charts and results |
-| `credit_risk_modelling.py` | The same code as a Python script |
-| `README.md` | This file |
-
----
-
-## Terms
-
-| Term | Meaning |
-|---|---|
-| PD | Probability of default: the chance that a borrower does not repay. |
-| Gini | A measure of how well the model ranks good and bad borrowers. 0 = random, 1 = perfect. |
-| KS | The largest gap between the score distributions of good and bad loans. |
-| WoE | Weight of Evidence: the log ratio of good loans to bad loans in a bin. |
-| IV | Information Value: how much a feature separates good and bad loans. |
-| PSI / CSI | Population (or characteristic) stability index: how much the score (or a feature) changed between two groups of applicants. Less than 0.1 is stable. More than 0.25 is a large change. |
-| EAD / LGD | Exposure at default / loss given default: how much money is open when a loan defaults, and how much of it is lost. |
-| Out-of-time | A test on loans from a later period than the training loans. |
