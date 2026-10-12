@@ -1,139 +1,194 @@
-# Credit Risk Modeling — PD Model and Application Scorecard
+# Credit Risk Modelling: Application Scorecard and Profit-Based Cutoff
 
-A probability-of-default model on Lending Club consumer loans, turned into a
-FICO-style scorecard and, finally, into an approval decision.
+This project builds a probability-of-default (PD) model for consumer loans.
+The model uses only data that a lender has at the time of approval.
+The project then converts the model into a 300–850 scorecard.
+Finally, it finds the cutoff that gives the most profit, not the best statistic.
 
-The model was the easy part. The decision was the point: moving the approval
-cutoff from the default 0.5 to a cost-aware 0.19 cut the rejection rate from
-**27.6% to 7.4%** while reducing missed defaults, on the same model.
+**Data:** Lending Club loans, 2007–2014 (466,285 loans, 75 columns).
+**Method:** WoE binning and logistic regression.
+**Validation:** out-of-time. The model trains on 2007–2011 loans and is tested on 2012 loans.
 
 ---
 
-## Results
+## Main results
 
-| Metric | Value |
+| Result | Value |
 |---|---|
-| AUROC (test) | 0.866 |
-| Gini | 0.732 |
-| AUC-PR | 0.976 |
-| Cross-validated AUROC (5-fold × 3 repeats) | 0.866 |
-| Scorecard range | 300–850 |
-| Approval cutoff score | 488 |
+| Out-of-time Gini (2012 loans) | **0.291** (95% CI 0.277–0.305) |
+| Gini of LendingClub's own sub-grade | 0.240 |
+| KS | 0.213 |
+| AUROC | 0.645 |
+| Score stability (PSI), 2012 and 2013–14 | 0.075 and 0.020 (stable) |
 
-**Data:** 466,285 loans issued 2007–2014, split 373,028 train / 93,257 test,
-stratified. 75 raw features reduced to 51, then to ~20 WoE-binned predictors.
-
-### The threshold decision
-
-The default 0.5 cutoff quietly assumes a false approval and a false rejection
-cost the same. In lending they don't — a charged-off loan costs far more than
-the margin forgone by declining a good applicant, and the class balance is
-roughly 9:1 good to bad.
-
-Selecting the cutoff by Youden's J instead of convention:
-
-| | Threshold 0.50 | Threshold 0.19 |
-|---|---|---|
-| Rejection rate | 27.6% | 7.4% |
-| Approved | 67,561 | 86,386 |
-| False negatives (good loans rejected) | 18.7% | 2.6% |
-| False positives (bad loans approved) | 2.1% | 6.3% |
-
-The 0.5 cutoff rejects more than a quarter of applicants — a large,
-unnecessary loss of business — and rejects good borrowers seven times more
-often than the tuned cutoff does. The tuned cutoff accepts more bad loans in
-exchange, which is the trade a lender should be making explicitly rather than
-inheriting from a library default.
+1. The model ranks borrowers better than LendingClub's own sub-grade.
+2. The standard statistical cutoff (Youden's J) catches 55% of defaults.
+   But it rejects 34% of good borrowers and loses 37% of the profit.
+3. A cutoff that changes with the loan's interest rate is the only rule that increases profit.
 
 ---
 
-## Method
+## Why this is version 2
 
-**Target definition.** `loan_status` collapsed to binary: Charged Off,
-Default, Late (31–120 days), and "Does not meet the credit policy: Charged
-Off" are bad (0); everything else good (1). Roughly 11% bad.
+Version 1 of this project had a Gini of 0.73.
+That result was not correct, because the model used data from after approval.
+Version 2 corrects these problems:
 
-**Leakage removal.** Features populated only *after* a borrower defaults —
-`recoveries`, `collection_recovery_fee`, `total_rec_prncp`,
-`total_rec_late_fee` — were dropped before modeling. They predict default
-almost perfectly and are worthless at application time.
+| Problem in v1 | Correction in v2 |
+|---|---|
+| The model used fields that exist only after the loan starts (`out_prncp`, `total_pymnt`, `total_rec_int`, payment dates). These fields leak the outcome. | v2 removes these fields. It keeps them in a separate `outcomes` table. This table defines the target and measures profit. The model never sees it. |
+| `Current` loans counted as good loans. Many of them had no time to default. | v2 uses only 36-month loans that ended before the data snapshot (January 2016). Each outcome is final. |
+| A random train/test split. | An out-of-time split: train on 2007–2011, test on 2012. |
+| `class_weight='balanced'` made the probabilities too high. | v2 removes it. The predicted PD is now a real probability. |
+| `revol_util` is in percent, but v1 binned it as a fraction. About 99% of loans went into one bin. | v2 bins `revol_util` in percent. |
+| The "Youden" cutoff (0.184) came from the wrong array, and v1 selected it on the test data. | v2 selects the Youden cutoff on the training data only. |
+| Some cells did not run on pandas 2 or later. | v2 runs on current pandas. |
 
-Information Value doubled as a leakage detector: `last_pymnt_amnt` and
-`mths_since_last_pymnt_d` were discarded for *abnormally high* IV, which in a
-credit scorecard is a symptom rather than a win.
-
-**Feature selection.** Chi-squared tests for categorical features, ANOVA
-F-statistic for numerical ones. Top 4 categorical and top 20 numerical
-retained; `out_prncp_inv` and `total_pymnt_inv` dropped for multicollinearity
-with their non-`_inv` counterparts. Features with negligible IV and flat WoE
-(`emp_length`, `total_acc`, `tot_cur_bal`) were dropped as having no
-discriminatory power.
-
-**WoE binning.** Every predictor was binned by Weight of Evidence, with bins
-inspected individually and sparse bins merged into neighbours. Long-tailed
-variables (`annual_inc` up to $75M, `revol_util` above 1.0) were capped into
-a single top bin before binning the rest.
-
-WoE binning is implemented as a custom scikit-learn transformer
-(`WoE_Binning`) inside a `Pipeline`, so the binning is fit on training folds
-only and cannot leak across cross-validation splits.
-
-**Model.** Logistic regression with `class_weight='balanced'`, evaluated by
-`RepeatedStratifiedKFold` (5 splits × 3 repeats) on AUROC.
-
-Logistic regression is not the highest-AUROC option available, and that is
-deliberate. A credit model has to be explainable and defensible: WoE bins
-produce monotonic, readable relationships, missing values become their own
-bin, and the coefficients convert directly into a scorecard a credit officer
-or a regulator can read line by line. In lending, a model everyone can audit
-beats a black box that scores two points higher.
-
-**Scorecard.** Coefficients scaled linearly to the FICO range (300–850), with
-reference categories fixed at zero. Scores computed on the test set by matrix
-multiplication of the WoE-transformed features against the scorecard.
+The v2 Gini is lower.
+It is the correct number for a model that scores applicants before approval.
 
 ---
 
-## Honest limitations
+## Data and population
 
-- **Some behavioural features remain.** `out_prncp`, `total_pymnt` and
-  `total_rec_int` describe loan performance *after* origination. They're
-  legitimate for a behavioural scorecard on an existing book, but for an
-  application scorecard — scoring someone before you lend — they would not be
-  available. Removing them would lower the AUROC and make the model a truer
-  application model.
-- **No out-of-time validation.** The split is random, not chronological. A
-  production credit model should be validated on a later time period than it
-  was trained on, since economic conditions shift.
-- **Youden's J is not a cost function.** It weights sensitivity and
-  specificity equally. A real cutoff would come from the actual cost ratio —
-  expected loss given default against the margin on a good loan — which would
-  likely land somewhere different. J is a defensible stand-in when those
-  numbers aren't available, not a substitute for them.
-- **PD only.** Expected loss is PD × LGD × EAD. This covers the first term.
-- **No PSI / stability monitoring.** A deployed scorecard needs population
-  stability tracking to detect drift between the development sample and
-  incoming applicants.
+| Group | Loans issued | Number of loans | Bad rate | Use |
+|---|---|---|---|---|
+| Train | 2007–2011 | 31,534 | 12.3% | Fit the bins and the model |
+| Test | 2012 | 43,425 | 13.7% | Out-of-time results |
+| Recent | 2013–2014 | 262,949 | not final | Stability check (PSI) only |
+
+A "bad" loan has the status Charged Off, Default, or Late (31–120 days).
 
 ---
 
-## Running it
+## The model
 
-`Credit_Risk_Modelling.ipynb` was written in Google Colab and reads the
-dataset from Google Drive. To run it elsewhere, replace the `drive.mount`
-cell with a local path to `loan_data_2007_2014.csv`
-([Lending Club data on Kaggle](https://www.kaggle.com/datasets/wordsforthewise/lending-club)).
+The model uses 10 features. All of them are known at the time of application:
 
-Dependencies: `pandas`, `numpy`, `scikit-learn`, `scipy`, `matplotlib`,
-`seaborn`.
+- `annual_inc`, `loan_to_income` (loan amount / annual income)
+- credit history length, in months, at the issue date
+- `inq_last_6mths`, `mths_since_last_delinq`, `pub_rec`
+- `revol_util`, `total_acc`
+- `grade`, `purpose`
+
+**Steps:**
+
+1. The `WoE_Binning` transformer fits the bins on the training data only.
+2. The bins are monotonic. Small bins merge into the adjacent bin.
+3. The transformer removes features with low Information Value (IV < 0.02).
+4. It also removes one feature from each pair with a correlation above 0.75.
+5. A logistic regression uses the binned features.
+6. The coefficients become a 300–850 scorecard.
+
+**Calibration.** The model ranks the loans correctly in all 10 score bands.
+But the mean predicted PD (11.2%) is less than the actual bad rate (13.7%).
+The 2012 loans were riskier than the earlier loans.
+To correct this, recalibrate the intercept on a recent group of loans.
+
+**In-time and out-of-time results.** The cross-validated Gini on the training data is 0.381.
+The out-of-time Gini is 0.291.
+The model does not overfit (the train Gini is 0.390).
+The decrease comes from the change in the borrower population over time.
 
 ---
 
-## Why this project exists
+## The cutoff decision
 
-The interesting question in risk modeling isn't how well a model ranks
-borrowers — it's where you draw the line, and what you decided an error was
-worth when you drew it. That question shows up everywhere: in credit
-approvals, in whether to trust a model's output or escalate it to a human, in
-whether a forecast's confidence interval deserves to be believed. This is the
-version of it that's easiest to read.
+A lower bad rate is not the goal. Profit is the goal.
+
+The project measures two values from the real cash flows of the training loans:
+
+- **g = 15.6%:** the return on a loan that the borrower repays.
+- **l = 44.7%:** the net loss on a loan that defaults (EAD 62%, LGD 93%, less the interest and fees received before the default).
+
+The bank should approve a loan when its expected profit is more than zero.
+This is true when **PD < g / (g + l) = 25.8%**.
+
+A loan with a higher interest rate earns more.
+So the **price-aware rule** lets the cutoff increase with the rate:
+from 14.4% at a 5.8% rate to 36.0% at a 17.9% rate.
+The rule uses the interest rate only for the decision, not as a model feature.
+
+### Results on the 2012 loans (real cash flows)
+
+| Cutoff rule | Loans rejected | Good loans rejected | Defaults caught | Bad rate of approved loans | Profit change |
+|---|---|---|---|---|---|
+| Approve all ($50.95M profit) | 0% | 0% | 0% | 13.7% | — |
+| Youden's J | 37.1% | 34.3% | 54.9% | 9.8% | **−37.2%** |
+| Flat profit rule (PD < 25.8%) | 1.9% | 1.5% | 4.4% | 13.3% | −0.3% |
+| Price-aware rule | 0.3% | 0.3% | 0.9% | 13.6% | **+0.24%** (+$0.12M) |
+
+- Youden's J gives the lowest bad rate, but it loses the most money.
+- The price-aware rule is the only rule that increases profit.
+  The 95% confidence interval of the gain (+$0.01M to +$0.25M) is above zero.
+- The gain is small because LendingClub's prices already covered the risk.
+  Each grade gave a positive return, from +6.7% (grade A) to +22.8% (grade G).
+
+---
+
+## Monitoring and reason codes
+
+**Stability.** The score is stable (PSI 0.075 for 2012, 0.020 for 2013–14).
+Two features changed more:
+
+- `purpose`: CSI 0.34 for 2013–14. This change is large.
+- `revol_util` and credit history length: CSI about 0.19. Monitor these features.
+
+**Reason codes.** For each declined applicant, the scorecard gives the features that cost the most points.
+This is similar to the reasons in an adverse-action notice.
+The first reason is `purpose` in 76% of declines,
+`annual_inc` in 13%, and `inq_last_6mths` in 11%.
+
+---
+
+## Limitations
+
+- **No reject inference.** The data contains only funded loans.
+- **No FICO score.** The data does not include it.
+- **Gross profit only.** The profit does not include funding and servicing costs.
+- **36-month loans only.** The 60-month loans have no final outcomes in this data.
+- **No fair-lending review.** Do a fair-lending review before you use this model on real applicants.
+
+---
+
+## How to run
+
+The notebook runs in Google Colab or in a local Jupyter environment.
+
+1. Download the data from Kaggle:
+   [Loan data 2007–2014 (devanshi23)](https://www.kaggle.com/datasets/devanshi23/loan-data-2007-2014).
+   The file name is `loan_data_2007_2014.csv`.
+2. **In Colab:** put the file in `My Drive/Colab Notebooks/`.
+   The notebook connects to Google Drive and reads the file from there.
+3. **On your computer:** put the file in the same folder as the notebook.
+   Or set the `LOAN_DATA_PATH` environment variable to the file path.
+4. Open `Credit_Risk_Modelling.ipynb` and run all cells.
+
+`credit_risk_modelling.py` contains the same code as a Python script.
+
+**Requirements:** Python 3.10+, pandas, numpy, scikit-learn, scipy, matplotlib, seaborn.
+
+---
+
+## Files
+
+| File | Contents |
+|---|---|
+| `Credit_Risk_Modelling.ipynb` | The full analysis, with charts and results |
+| `credit_risk_modelling.py` | The same code as a Python script |
+| `README.md` | This file |
+
+---
+
+## Terms
+
+| Term | Meaning |
+|---|---|
+| PD | Probability of default: the chance that a borrower does not repay. |
+| Gini | A measure of how well the model ranks good and bad borrowers. 0 = random, 1 = perfect. |
+| KS | The largest gap between the score distributions of good and bad loans. |
+| WoE | Weight of Evidence: the log ratio of good loans to bad loans in a bin. |
+| IV | Information Value: how much a feature separates good and bad loans. |
+| PSI / CSI | Population (or characteristic) stability index: how much the score (or a feature) changed between two groups of applicants. Less than 0.1 is stable. More than 0.25 is a large change. |
+| EAD / LGD | Exposure at default / loss given default: how much money is open when a loan defaults, and how much of it is lost. |
+| Out-of-time | A test on loans from a later period than the training loans. |
